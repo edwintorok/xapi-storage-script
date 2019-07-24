@@ -85,27 +85,13 @@ let return_volume_rpc result = return_rpc Xapi_storage.Control.typ_of_exns resul
 let return_plugin_rpc result = return_rpc Xapi_storage.Common.typ_of_exnt result
 let return_data_rpc result = return_rpc Xapi_storage.Common.typ_of_exnt result
 
-
-let use_syslog = ref false
-
 let log level fmt =
-  Printf.ksprintf (fun s ->
-      if !use_syslog then begin
-        (* FIXME: this is synchronous and will block other I/O.
-         * This should use Log_extended.Syslog, but that brings in Core's Syslog module
-         * which conflicts with ours *)
-        Syslog.log Syslog.Daemon level s;
-      end else begin
-        let w = Lazy.force Writer.stderr in
-        Writer.write w s;
-        Writer.newline w
-      end
-    ) fmt
+  Log.Global.printf ~level fmt
 
-let debug fmt = log Syslog.Debug   fmt
-let info  fmt = log Syslog.Info   fmt
-let warn  fmt = log Syslog.Warning fmt
-let error fmt = log Syslog.Err     fmt
+let debug fmt = Log.Global.debug   fmt
+let info  fmt = Log.Global.info    fmt
+let warn  fmt = Log.Global.info    fmt (* there is no warn level *)
+let error fmt = Log.Global.error   fmt
 
 let pvs_version = "3.0"
 let supported_api_versions = [pvs_version; "5.0"]
@@ -1383,7 +1369,7 @@ let main ~root_dir ~state_path ~switch_path =
       loop () in
   loop ()
 
-open Xcp_service
+open Xapi_idl.Service
 
 let description = String.concat ~sep:" " [
     "Allow xapi storage adapters to be written as individual scripts.";
@@ -1411,12 +1397,12 @@ let _ =
   let state_path = ref "/var/run/nonpersistent/xapi-storage-script/state.db" in
 
   let resources = [
-    { Xcp_service.name = "root";
+    { Xapi_idl.Service.name = "root";
       description = "directory whose sub-directories contain sets of per-operation scripts, one sub-directory per queue name";
       essential = true;
       path = root_dir;
       perms = [ U.X_OK ];
-    }; { Xcp_service.name = "state";
+    }; { Xapi_idl.Service.name = "state";
          description = "file containing attached SR information, should be deleted on host boot";
          essential = false;
          path = state_path;
@@ -1441,9 +1427,10 @@ let _ =
     error "Error: %s\n%!" x;
     Pervasives.exit 1);
 
-  if !Xcp_service.daemon then begin
-    Xcp_service.maybe_daemonize ();
-    use_syslog := true;
+  if !Xapi_idl.Service.daemon then begin
+    Xapi_idl.Service.maybe_daemonize ();
+    let syslog = Log_extended.Syslog.output ~facility:Syslog.Facility.DAEMON () in
+    Log.Global.set_output [ syslog ];
     info "Daemonisation successful.";
   end;
   let (_: unit Deferred.t) =
@@ -1453,7 +1440,7 @@ let _ =
            if !self_test_only then
              self_test ~root_dir:!root_dir
            else
-             main ~root_dir:!root_dir ~state_path:!state_path ~switch_path:!Xcp_client.switch_path
+             main ~root_dir:!root_dir ~state_path:!state_path ~switch_path:!Xapi_idl.Client.switch_path
         )
       >>= function
       | Ok () ->
